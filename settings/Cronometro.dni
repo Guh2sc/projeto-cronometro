@@ -1,5 +1,5 @@
 [DebugChecksum]
-Checksum=-73105611
+Checksum=-1519367235
 [Stack]
 FillEnabled=0
 OverflowWarningsEnabled=1
@@ -25,13 +25,13 @@ State Storage=0
 ShowArgs=0
 [Disassembly]
 MixedMode=1
-[TermIOLog]
-LoggingEnabled=_ 0
-LogFile=_ ""
 [Log file]
 LoggingEnabled=_ 0
 LogFile=_ ""
 Category=_ 0
+[TermIOLog]
+LoggingEnabled=_ 0
+LogFile=_ ""
 [Breakpoints]
 Count=0
 [FET]

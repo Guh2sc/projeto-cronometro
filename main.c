@@ -1,9 +1,20 @@
+#define SUB_SYSTEM	0
+
+
 #include "io430.h"
 #include "teclado.h"
 #include "lcd.h"
 #define DESLOCAMENTO    4                                      // Define o valor de deslocamento para o cursor no display LCD.
 #define TEMPORIZACAO    1                                      // Define o valor de temporização para algum propósito específico.
 
+//------------------- Fonte de SMCLK=500kHz com IDx=0 -------------------------- 
+# define INI_TAR	65291		//Contagem de 500 pulsos de clock (F=1kHZ)	| 500k/1k=500 |65536-65288= 248
+int segundo =0;
+
+unsigned char reset = 1, ativo = 0;              //Cria a variavel reset, que serve para conferir se o cronômetro foi zerado.
+// Define a posição inicial do cursor no display LCD e zera o cronômetro.
+unsigned char posicao_inicial = (0xC0 + DESLOCAMENTO), tecla; // Cria as variaveis que irão indicar a posição inicial no cronômetro, cria a variavel tecla e ativo.
+ 
 unsigned char us='0', ds='0', um='0', dm='0', uh='0', dh='0';  // Cria as variveis utilizadas pelo cronômetro.
 /*
 us: unidade de segundo
@@ -176,18 +187,61 @@ void zera_cronometro(unsigned char PI)
 }
 
 void main(void)
-{
-  WDTCTL = WDTPW + WDTHOLD;   
+{  
+  
+  // Stop watchdog timer to prevent time out reset
+  WDTCTL = WDTPW + WDTHOLD;
+  
+// ----------------------- Configuração do Sistema de Clock --------------------
+  //Reseta DCO e RSEL
+  BCSCTL1 &= ~(RSEL2+RSEL1+RSEL0);						 
+  DCOCTL &= ~(DCO2+DCO1+DCO0);     			
+
+  // Configuração do módulo de clock do sistema
+  // Configuração DCO para frequência ~734KHz - Configuração default
+  
+  // Para este exemplo, principalmente se a fonte de clock selecionada for 
+  // a SMCLK, é fundamental que a CPU trabalhe em uma frequência que permita
+  // trocar o sinal de saída e recarregar o TAR, antes que um novo pulso de
+  // ocorra na entrada do contador. Por este motivo não estamos trabalhando com
+  // o DCO default e com com a máxima frequência de DCO=5,2MHz
+
+  //Faixa de frequência com  RSEL=6
+  BCSCTL1 |= (RSEL2+RSEL1+RSEL0);						 
+  DCOCTL |= (DCO2+DCO1+DCO0);     		// DCO = 7 = 111b	(Proteus => 5,2MHz)	
+  
+  
+  //  BCSCTL2 |= SELM0+SELM1;		//Define XT2 como fonte de clock do MCLK
+  #ifdef SUB_SYSTEM
+    BCSCTL2 |= SELS;				//Define XT2 como fonte de clock do SMCLK
+    BCSCTL2 |= DIVS1+DIVS0;		//Divide fonte por 8 SMCLK=500kHz
+  #endif
+    
+// -----------------------------------------------------------------------------
+
+// ----------------------- Configuração do Timer_A -----------------------------
+  // Define valor inicial do TAR
+  TAR=INI_TAR;
+  // Núcleo do Timer
+  #ifdef SUB_SYSTEM
+    TACTL = TASSEL1 +          	// Fonte do clock: SMCLK ( 4MHz )
+  #endif	
+  //	      ID0 +					// Divide FONTE CLOCK/2 
+//	      ID1 +					// Divide FONTE CLOCK/4
+  //	      ID1 +	ID0 +			// Divide FONTE CLOCK/8
+            MC_2 +               	// Modo de contagem: crescente contínua
+                    TAIE; 	    		// Habilita a interrupção do núcleo
+
+// -----------------------------------------------------------------------------
+  __bis_SR_register(GIE);   	// Habilita interrupção geral
+  
+  
   configura_LCM();                      // Configura o display LCD.
   programa_LCM();                       // Inicializa o programa no display LCD.
   configura_teclado();                  // Configura o teclado.
   envia_comando(0x80 + 3);              // Posiciona o cursor do display na terceira linha .  
   envia_string("Cronometro$");          // Envia a palavra "Cronometro" para o display LCD.
-  
-  // Define a posição inicial do cursor no display LCD e zera o cronômetro.
-  unsigned char posicao_inicial = (0xC0 + DESLOCAMENTO), ativo = 0, tecla; // Cria as variaveis que irão indicar a posição inicial no cronômetro, cria a variavel tecla e ativo.
-  unsigned char reset = 1;              //Cria a variavel reset, que serve para conferir se o cronômetro foi zerado.
-  
+  P1DIR |= BIT1;
   envia_comando(posicao_inicial);       // Posiciona o cursor na posição inicial que ele irá se escrito.
   zera_cronometro(posicao_inicial);     // Chama a função zera cronômetro para criar-lo.
    
@@ -204,16 +258,50 @@ void main(void)
       ativo = 1;                        // Ativa o cronômetro.
     else if(tecla == '2')               // Caso a tecla '2' seja pressionada.
     {
-      while(tecla != '3')               // Aguarda até que a tecla '3' seja pressionada para sair do loop.
-      {
-        tecla = teclado();              // Verifica qual tecla do teclado foi pressionada.
-      }
+            ativo = 0;                        // Desativa o cronômetro.
+    }
+    else if(tecla == '3')
+    {
+      ativo = 1;
     }
     
-    if(ativo == 1)                      // Pergunta se o cronômetro está ativo.
-    {
-      cronometro(posicao_inicial, reset); // Executa o cronômetro e desativa a reinicialização
-      reset = 0;
-    }
   }
+}
+
+// TA0_A1 Interrupt vector
+#pragma vector = TIMER0_A1_VECTOR
+__interrupt void TIMER0_A1_ISR (void)
+{
+  TACTL &= ~MC_3;								//Parar o Timer
+  segundo++;
+                    P1OUT ^= BIT1;
+
+  switch(__even_in_range(TA0IV,0x0A))			//Só verifica os valores entre 0 e 0x0A
+  	{
+      case TA0IV_NONE: break;              	// Vector  0:  No interrupt
+      case TA0IV_TACCR1:                   	// Vector  2:  TACCR1 CCIFG
+       break;
+      case TA0IV_TACCR2:              		// Vector  4:  TACCR2 CCIFG
+        break;
+      case TA0IV_6: break;                  // Vector  6:  Reserved CCIFG
+      case TA0IV_8: break;                  // Vector  8:  Reserved CCIFG
+      
+      case TA0IV_TAIFG: 					// Vector 10:  TAIFG
+        
+                if(segundo==2000)
+                {
+                  if(ativo==1)
+                  {
+                    cronometro(posicao_inicial, reset); // Executa o cronômetro e desativa a reinicialização
+                    reset = 0;
+                  }
+                  segundo = 0;
+                }
+                // Inverte a saída		
+  		// Define valor inicial do TAR
+  		TAR=INI_TAR;
+		TACTL |= MC_2;						//Disparar o Timer em modo continuo
+		break;              				
+      default: 	break;
+  	}
 }
